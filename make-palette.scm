@@ -28,7 +28,8 @@
  SF-COLOR       "Lower Right"   '(0 0 255)
  SF-ADJUSTMENT  "Steps Across"  '(7 2 16 1 1 0 SF-SLIDER)
  SF-ADJUSTMENT  "Steps Down"    '(7 2 16 1 1 0 SF-SLIDER)
- SF-OPTION      "Interpolation" '("linear" "cosine" "smoothstep"))
+ SF-TOGGLE      "Perception Correction" 0
+ SF-OPTION      "Interpolation" '("linear" "cosine" "smoothstep" "custom-1"))
 
 ;; Register the main function
 (script-fu-menu-register "script-fu-make-palette" 
@@ -37,17 +38,28 @@
 ;; Main function
 (define (script-fu-make-palette the-image the-drawable color-1 color-2
 				color-3 color-4 num-steps-across
-				num-steps-down interpolation)
+				num-steps-down use-correction interpolation)
 
 
+  ;; The following 2 functions are for corrective (proper) color averaging
+  (define (square-color color)
+    (map (lambda (n) (* n n)) color))
 
-  ;; Function to blend two numbers with a percent like .5 etc
+  (define (square-root-color color)
+    (map sqrt color))
+
+  ;;Function to blend two numbers with a percent like .5 etc
   (define (linear-interpolation start end percent)
     (let ((range (- end start)))
       (+ start (* range percent))))
 
 
-  ;; TODO check this, looks like it is broken
+  (define (custom-1-interpolation start end percent)
+    (let* ((pi (* 4.0 (atan 1.0)))
+	   (new-percent (cos (* percent pi))))
+      (linear-interpolation start end new-percent)))
+  
+  ;; TODO check this
   (define (cosine-interpolation start end percent)
     (let* ((pi (* 4 (atan 1.0)))
 	   (angle (* pi percent))
@@ -62,20 +74,29 @@
 	   (new-percent (expt percent 2)))
       (linear-interpolation start end new-percent)))
 	   
-  ;; Function to interpolate colors in a linear way
+  ;; Function to interpolate colors
   (define (color-interpolate col1 col2 percent func)
-    (list
-     (func (car col1) (car col2) percent)
-     (func (cadr col1) (cadr col2) percent)
-     (func (caddr col1) (caddr col2) percent)))
-
+    ; Provide for the 2 ways of averaging color, mathy way, corrective way
+    (if (= use-correction 0)
+	; No correction (crude way)
+	(list
+	 (func (car   col1) (car   col2) percent)
+	 (func (cadr  col1) (cadr  col2) percent)
+	 (func (caddr col1) (caddr col2) percent))
+	; Squaring products then square rooting result
+	(list
+	 (sqrt (func (expt (car   col1) 2) (expt (car   col2) 2) percent))
+	 (sqrt (func (expt (cadr  col1) 2) (expt (cadr  col2) 2) percent))
+	 (sqrt (func (expt (caddr col1) 2) (expt (caddr col2) 2) percent)))))
+    
   ;; Function to draw a single box, messes with context color and selection
   (define (draw-box x y width height color)
-    (gimp-context-push)
-    (gimp-image-select-rectangle the-image 2 x y width height)
-    (gimp-context-set-foreground color)
-    (gimp-edit-fill the-drawable 0)
-    (gimp-context-pop))
+    (let ((rounded-color (map round color)))
+      (gimp-context-push)
+      (gimp-image-select-rectangle the-image 2 x y width height)
+      (gimp-context-set-foreground rounded-color)
+      (gimp-edit-fill the-drawable 0)
+      (gimp-context-pop)))
 
   ;; Use recursion to draw boxes for the palette
   (define (draw-boxes-down x y width height color color2 num-boxes func
@@ -113,14 +134,15 @@
 	     (draw-columns (+ x width) y width height func (+ c 1))))))
 
   ;; Now some local bindings and the main call to draw-boxes
-
     ;; Catch and adjust interpolation given what was selected on the menu
   (cond ((= interpolation 0)
 	 (set! interpolation linear-interpolation))
 	((= interpolation 1)
 	 (set! interpolation cosine-interpolation))
 	((= interpolation 2)
-	 (set! interpolation smoothstep-interpolation)))
+	 (set! interpolation smoothstep-interpolation))
+	((= interpolation 3)
+	 (set! interpolation custom-1-interpolation)))
 
   (let* ((bounds (gimp-selection-bounds the-image))
 	 (selected? (car bounds)) ; Super gross, should not be number?
